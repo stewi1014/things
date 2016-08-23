@@ -108,28 +108,30 @@ type Runner chan struct{}
 
 // Run calls the given RunFunc after every duration of d
 // Run blocks until it is stopped by Stop or StopOne
-// Run can be called multiple times with different function, however no distinction between the functions will be made.
+// Run can be called multiple times with different functions, however no distinction between the functions will be made.
 // runFunc will not be called until it's previous call returns.
 func (r *Runner) Run(runFunc RunFunc, d time.Duration) {
 	ticker := time.NewTicker(d)
 	last := time.Now()
 
 	for {
-		<-ticker.C
-
 		select {
 		case <-*r:
 			return
-		}
+		case <-ticker.C:
+			runFunc(time.Now().Sub(last))
+			last = time.Now()
 
-		runFunc(time.Now().Sub(last))
-		last = time.Now()
+		}
 	}
 }
 
-// StopOne will stop the ongoing execution of one runFunc.
-// The halted routine will be the next to reach it's timeout
-// StopOne blocks until the routien is stopped.
+// StopOne will stop the ongoing execution of one runFunc
 func (r *Runner) StopOne() {
 	*r <- struct{}{}
+}
+
+// Stop makes all Run functions return
+func (r *Runner) Stop() {
+	close(*r)
 }
