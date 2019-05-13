@@ -6,8 +6,8 @@ import (
 	"github.com/chewxy/math32"
 )
 
-// Mod implements a true, mathematic modulo
-// the return is always positive, and it functions for negative values of i and mod
+// Mod implements a mathematic modulo.
+// The return is always positive, and it functions for negative values of i and mod
 func Mod(x, divisor int) int {
 	if divisor < 0 {
 		divisor = -divisor
@@ -19,8 +19,8 @@ func Mod(x, divisor int) int {
 	return modulo
 }
 
-// Modf implements a true, mathematic modulo
-// the return is always positive, and it functions for negative values of i and mod
+// Modf implements a mathematic modulo.
+// The return is always positive, and it functions for negative values of i and mod
 func Modf(x, divisor float64) float64 {
 	if divisor == 0 || math.IsNaN(x) || math.IsNaN(divisor) {
 		return math.NaN()
@@ -49,8 +49,8 @@ func Modf(x, divisor float64) float64 {
 	return r
 }
 
-// Modf32 implements a true, mathematic modulo
-// the return is always positive, and it functions for negative values of i and mod
+// Modf32 implements a mathematic modulo.
+// The return is always positive, and it functions for negative values of i and mod
 func Modf32(x, divisor float32) float32 {
 	if divisor == 0 || math32.IsNaN(x) || math32.IsNaN(divisor) {
 		return math32.NaN()
