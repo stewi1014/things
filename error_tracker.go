@@ -6,11 +6,14 @@ import (
 
 // NewErrorTracker creates a new error tracker
 func NewErrorTracker() *ErrorTracker {
-	t := new(ErrorTracker)
+	return new(ErrorTracker)
+}
 
-	t.Errors = make([]error, 0)
-
-	return t
+// Errors combines multiple errors into one.
+func Errors(errors ...error) *ErrorTracker {
+	et := NewErrorTracker()
+	et.Add(errors...)
+	return et
 }
 
 // ErrorTracker keeps track of errors that occur, allowing them to be collected and handled as one
@@ -62,11 +65,21 @@ func (t *ErrorTracker) HasError() bool {
 
 // ErrorTracker implements error
 func (t *ErrorTracker) Error() string {
-	str := fmt.Sprintf("Caught %v errors;", len(t.Errors))
-	for n, e := range t.Errors {
-		str += fmt.Sprintf("Error %v: %v\n", n, e)
+	switch len(t.Errors) {
+	case 0:
+		return "no errors! remember to use ErrorTracker.Get()"
+	case 1:
+		return t.Errors[0].Error()
+	default:
+		var str string
+		for i := range t.Errors {
+			if i > 0 {
+				str += "\n"
+			}
+			str += fmt.Sprintf("%v: %v", i, t.Errors[i].Error())
+		}
+		return str
 	}
-	return str
 }
 
 // SetErrorCallback calls the given function when a non nil error is added
