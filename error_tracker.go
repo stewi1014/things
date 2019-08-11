@@ -10,10 +10,10 @@ func NewErrorTracker() *ErrorTracker {
 }
 
 // Errors combines multiple errors into one.
-func Errors(errors ...error) *ErrorTracker {
+func Errors(errors ...error) error {
 	et := NewErrorTracker()
 	et.Add(errors...)
-	return et
+	return et.Get()
 }
 
 // ErrorTracker keeps track of errors that occur, allowing them to be collected and handled as one
