@@ -28,7 +28,7 @@ func TestErrSet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			oerr := tt.args.err
 			ErrSet(&tt.args.err, tt.args.key, tt.args.value)
-			val := ErrGet(tt.args.err, tt.args.key)
+			val, _ := ErrGet(tt.args.err, tt.args.key)
 			if val != tt.args.value {
 				t.Errorf("wrong value, got %v but wanted %v", val, tt.args.value)
 			}
