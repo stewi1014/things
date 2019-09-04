@@ -183,73 +183,74 @@ func LdExp64(sign, exponent, fraction uint64) float64 {
 
 // Mod implements a mathematic modulo.
 // The return is always positive, and it functions for negative values of x and divisor
-func Mod(x, divisor int) int {
-	if divisor < 0 {
-		divisor = -divisor
+// A zero modulus will panic with integer divide by zero.
+func Mod(x, modulus int) int {
+	if modulus < 0 {
+		modulus = -modulus
 	}
-	modulo := x - x/divisor*divisor
+	modulo := x - x/modulus*modulus
 	if modulo < 0 {
-		return modulo + divisor
+		return modulo + modulus
 	}
 	return modulo
 }
 
 // Modf implements a mathematic modulo.
 // The return is always positive, and it functions for negative values of x and divisor
-func Modf(x, divisor float64) float64 {
-	if divisor == 0 || math.IsNaN(x) || math.IsNaN(divisor) {
+func Modf(x, modulus float64) float64 {
+	if modulus == 0 || math.IsNaN(x) || math.IsNaN(modulus) {
 		return math.NaN()
 	}
-	if math.IsInf(divisor, 0) {
+	if math.IsInf(modulus, 0) {
 		return math.Abs(x)
 	}
-	divisor = math.Abs(divisor)
+	modulus = math.Abs(modulus)
 
-	yfr, yexp := math.Frexp(divisor)
+	yfr, yexp := math.Frexp(modulus)
 	r := x
 	if x < 0 {
 		r = -x
 	}
 
-	for r >= divisor {
+	for r >= modulus {
 		rfr, rexp := math.Frexp(r)
 		if rfr < yfr {
 			rexp = rexp - 1
 		}
-		r = r - math.Ldexp(divisor, rexp-yexp)
+		r = r - math.Ldexp(modulus, rexp-yexp)
 	}
 	if x < 0 {
-		return divisor - r
+		return modulus - r
 	}
 	return r
 }
 
 // Modf32 implements a mathematic modulo.
 // The return is always positive, and it functions for negative values of x and divisor
-func Modf32(x, divisor float32) float32 {
-	if divisor == 0 || math32.IsNaN(x) || math32.IsNaN(divisor) {
+func Modf32(x, modulus float32) float32 {
+	if modulus == 0 || math32.IsNaN(x) || math32.IsNaN(modulus) {
 		return math32.NaN()
 	}
-	if math32.IsInf(divisor, 0) {
+	if math32.IsInf(modulus, 0) {
 		return math32.Abs(x)
 	}
-	divisor = math32.Abs(divisor)
+	modulus = math32.Abs(modulus)
 
-	yfr, yexp := math32.Frexp(divisor)
+	yfr, yexp := math32.Frexp(modulus)
 	r := x
 	if x < 0 {
 		r = -x
 	}
 
-	for r >= divisor {
+	for r >= modulus {
 		rfr, rexp := math32.Frexp(r)
 		if rfr < yfr {
 			rexp = rexp - 1
 		}
-		r = r - math32.Ldexp(divisor, rexp-yexp)
+		r = r - math32.Ldexp(modulus, rexp-yexp)
 	}
 	if x < 0 {
-		return divisor - r
+		return modulus - r
 	}
 	return r
 }

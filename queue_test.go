@@ -2,7 +2,6 @@ package things
 
 import (
 	"errors"
-	"fmt"
 	"sync/atomic"
 	"testing"
 )
@@ -41,33 +40,36 @@ func TestQueue(t *testing.T) {
 	queue := NewQueue(nil)
 
 	queue.Do(funcs...)
-	for i := 1; i < testNum/2; i++ {
+	for i := 1; i < testNum/10; i++ {
 		queue.Do(funcs...)
 	}
 
 	doAdd := make(chan struct{})
 	doneAdd := make(chan struct{})
 
-	queue.Do(func() error {
-		doAdd <- struct{}{}
-		<-doneAdd
-		fmt.Println(atomic.LoadUint64(&num))
-		return errTask
-	})
+	ec := make(chan error)
+	go func() {
+		ec <- queue.Err(true)
+	}()
 
 	for i := 20; i >= 0; i-- {
 		go queue.Run(0)
 	}
 
+	queue.Do(func() error {
+		close(doAdd)
+		<-doneAdd
+		return errTask
+	})
+
 	<-doAdd
-	for i := testNum / 2; i < testNum; i++ {
+	for i := testNum / 10; i < testNum; i++ {
 		queue.Do(funcs...)
 	}
-	doneAdd <- struct{}{}
+	close(doneAdd)
 
 	if err := queue.Wait(); err != errTask {
-		t.Logf("expected %v but got %v", errTask, err)
-		t.Fail()
+		t.Errorf("expected %v from Wait() but got %v", errTask, err)
 	}
 
 	queue.SkipErrored()
@@ -78,9 +80,17 @@ func TestQueue(t *testing.T) {
 	}
 
 	if num != uint64(testNum*batchSize) {
-		t.Logf("not all functions were ran! Queued %v but only ran %v", testNum*batchSize, num)
-		t.Fail()
+		t.Errorf("not all functions were ran! Queued %v but only ran %v", testNum*batchSize, num)
 	}
-	fmt.Println(num)
+
+	if err := <-ec; err != errTask {
+		t.Errorf("expected %v from error channel but got %v", errTask, err)
+	}
+
+	queue.Reset(nil)
+	if err := queue.Err(false); err != nil {
+		t.Errorf("reset didn't clear error, got %v", err)
+	}
+
 	num = 0
 }

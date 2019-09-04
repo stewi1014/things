@@ -8,12 +8,11 @@ import (
 const buffSize = 2048 // buffer size for Queue
 
 // NewQueue creates a new queue with the given context.
+// Calling new(Queue) or Queue{} is sufficent.
 // A nil context is valid.
 func NewQueue(ctx context.Context) *Queue {
-	q := &Queue{
-		tasks: sync.NewCond(&sync.Mutex{}),
-	}
-	q.context(ctx)
+	q := &Queue{}
+	q.Context(ctx)
 	return q
 }
 
@@ -21,21 +20,27 @@ func NewQueue(ctx context.Context) *Queue {
 // Tasks are executed by calls to Run and RunQueued.
 // A Queue cannot be copied.
 type Queue struct {
+	// Sync
+	once  sync.Once
+	cond  sync.Cond
+	mutex sync.Mutex
+
+	// Runtime
+	originalCtx context.Context // Original context.
+	ctx         context.Context // Our internal context
+	ctxCancel   context.CancelFunc
+	exitError   error
+	running     int
+
+	// Queue
 	queue []func() error
 	off   int // queue index for reading
 	count int // counter for runners
 
-	// used to recover the queue after an error.
+	// Task after-error recovery.
 	recover     [][]func() error
 	errCountInd int // recover index of errored runner
-	errIndex    int // index of errored task
-
-	octx      context.Context // Original context.
-	ctx       context.Context // Our internal context
-	ctxCancel context.CancelFunc
-	exitError error
-	tasks     *sync.Cond
-	running   int
+	errIndex    int // queue index of errored task
 }
 
 // Run executes tasks in the Queue.
@@ -50,7 +55,8 @@ type Queue struct {
 //
 // Subsequent calls to Run after an error will clear the error and attempt to resume execution.
 func (q *Queue) Run(n int) error {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
+	q.init()
 	var buff []func() error
 	if n <= 0 {
 		buff = make([]func() error, buffSize)
@@ -64,20 +70,20 @@ func (q *Queue) Run(n int) error {
 
 	for {
 		for q.len() == 0 && q.ctx.Err() == nil {
-			q.tasks.Wait()
+			q.cond.Wait()
 		}
 		if n > 0 && n < len(buff) {
 			buff = buff[:n]
 		}
 		e, err := q.run(buff)
 		if err != nil {
-			q.tasks.L.Unlock()
+			q.mutex.Unlock()
 			return err
 		}
 		if n > 0 {
 			n -= e
 			if n <= 0 {
-				q.tasks.L.Unlock()
+				q.mutex.Unlock()
 				return nil
 			}
 		}
@@ -88,7 +94,7 @@ func (q *Queue) Run(n int) error {
 // if less than n tasks are queued, however it will execute tasks added during execution.
 // If n is 0 or negative, RunQueued returns only when the Queue is empty.
 func (q *Queue) RunQueued(n int) (int, error) {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 
 	if q.err() != nil {
 		q.resume()
@@ -118,16 +124,16 @@ func (q *Queue) RunQueued(n int) (int, error) {
 		e, err := q.run(buff)
 		done += e
 		if err != nil {
-			q.tasks.L.Unlock()
+			q.mutex.Unlock()
 			return done, err
 		}
 		if n > 0 && done >= n {
-			q.tasks.L.Unlock()
+			q.mutex.Unlock()
 			return done, nil
 		}
 	}
 
-	q.tasks.L.Unlock()
+	q.mutex.Unlock()
 	return done, nil
 }
 
@@ -139,50 +145,50 @@ func (q *Queue) run(buff []func() error) (int, error) {
 
 	q.running++
 	defer func() {
-		q.tasks.Broadcast()
+		q.cond.Broadcast()
 	}()
 
 	ctx := q.ctx
 	c, index := q.getTasks(buff)
 
-	q.tasks.L.Unlock()
+	q.mutex.Unlock()
 
 	var err error
 	for i := 0; i < c; i++ {
 		if ctx.Err() != nil {
 			// Check if the context has just switched.
-			q.tasks.L.Lock()
+			q.mutex.Lock()
 			ctx = q.ctx
 			err = ctx.Err()
 			if err != nil {
 				q.cancel()
 				q.returnTasks(buff[i:c], index)
-				if q.running == 1 {
+				q.running--
+				if q.running == 0 {
 					// We're last
 					q.parseRecovered()
 				}
-				q.running--
 				return i, err
 			}
-			q.tasks.L.Unlock()
+			q.mutex.Unlock()
 		}
 		err = buff[i]()
 		if err != nil {
-			q.tasks.L.Lock()
+			q.mutex.Lock()
 			if q.exitError == nil {
 				q.exitError = err
 			}
 			q.cancel()
 			q.failTask(buff[i:c], index)
-			if q.running == 1 {
+			q.running--
+			if q.running == 0 {
 				q.parseRecovered()
 			}
-			q.running--
 			return i, err
 		}
 	}
 
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 	q.running--
 	return c, err
 }
@@ -191,20 +197,20 @@ func (q *Queue) run(buff []func() error) (int, error) {
 // It does not count currently executing tasks, and might increase without calls to Do as
 // Run calls may return unexecuted tasks back to the queue if an error is encountered.
 func (q *Queue) Len() int {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 	l := q.len()
-	q.tasks.L.Unlock()
+	q.mutex.Unlock()
 	return l
 }
 
 // IsIdle returns true if there are no Run calls, or all Run calls are waiting for more tasks.
 func (q *Queue) IsIdle() bool {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 	if q.running > 0 {
-		q.tasks.L.Unlock()
+		q.mutex.Unlock()
 		return false
 	}
-	q.tasks.L.Unlock()
+	q.mutex.Unlock()
 	return true
 }
 
@@ -214,43 +220,42 @@ func (q *Queue) IsIdle() bool {
 // taking care to respect order. The error can then be handled, and tasks resumed by calling Run again.
 // SkipOne is useful for skipping the errored task if needed.
 func (q *Queue) Do(f ...func() error) {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 	copy(q.queue[q.grow(len(f)):], f)
-	q.tasks.L.Unlock()
-	q.tasks.Broadcast()
+	q.mutex.Unlock()
+	q.cond.Broadcast()
 }
 
 // SkipErrored skips the task which produced the error after execution was halted.
 // If execution is not halted, it waits until it has.
 func (q *Queue) SkipErrored() bool {
-	q.tasks.L.Lock()
-	for q.running > 0 {
-		q.tasks.Wait()
-	}
+	q.mutex.Lock()
+	q.waitExit()
 	l := q.len()
 	if l <= 0 || q.errIndex < 0 {
-		q.tasks.L.Unlock()
+		q.mutex.Unlock()
 		return false
 	}
 
 	if q.errIndex > l || q.errIndex <= 0 {
-		q.tasks.L.Unlock()
+		q.mutex.Unlock()
 		return false
 	}
 
 	copy(q.queue[q.off+1:q.off+q.errIndex], q.queue[q.off:q.off+q.errIndex-1])
 	q.off++
 	q.errIndex = 0
-	q.tasks.L.Unlock()
+	q.mutex.Unlock()
 	return true
 }
 
 // Cancel stops execution of tasks.
-// It does not wait for runners to return.
+// It does not wait for runners to return, and does not remove any tasks from the queue.
+// Calling cancel effectively pauses execution.
 func (q *Queue) Cancel() {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 	q.cancel()
-	q.tasks.L.Unlock()
+	q.mutex.Unlock()
 }
 
 func (q *Queue) cancel() {
@@ -259,13 +264,17 @@ func (q *Queue) cancel() {
 	}
 }
 
-// Err returns nil if execution is running or not started yet,
-// If the execution has halted, Err returns an error explaining why.
+// Err returns an error explaining why execution has halted.
+// If there is no error, and wait is true, Err will block until an error occours.
 // Calling Run again will remove the error and resume execution.
-func (q *Queue) Err() error {
-	q.tasks.L.Lock()
+func (q *Queue) Err(wait bool) error {
+	q.mutex.Lock()
+	q.init()
 	err := q.err()
-	q.tasks.L.Unlock()
+	for ; err == nil && wait; err = q.err() {
+		q.cond.Wait()
+	}
+	q.mutex.Unlock()
 	return err
 }
 
@@ -281,26 +290,27 @@ func (q *Queue) err() error {
 // If a task is executing, it blocks until it returns.
 // A nil context is valid.
 func (q *Queue) Reset(ctx context.Context) {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 	q.cancel()
-	q.wait()
+	q.waitExit()
 	q.context(ctx)
 	q.exitError = nil
-	q.tasks.L.Unlock()
+	q.clearQueue()
+	q.mutex.Unlock()
 }
 
 // Context sets the context for the Queue. It doesn't impact the queue or execution.
 // A nil context is valid.
 func (q *Queue) Context(ctx context.Context) {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 	q.context(ctx)
-	q.tasks.L.Unlock()
+	q.mutex.Unlock()
 }
 
 // Set context
 // mutex must be held
 func (q *Queue) context(ctx context.Context) {
-	q.octx = ctx
+	q.originalCtx = ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -310,32 +320,48 @@ func (q *Queue) context(ctx context.Context) {
 	q.ctx, q.ctxCancel = context.WithCancel(ctx)
 	go func() {
 		<-q.ctx.Done()
-		q.tasks.Broadcast()
+		q.cond.Broadcast()
 	}()
 }
 
 // Wait waits until the Queue is either caught up or errored, returning the error if encountered.
 func (q *Queue) Wait() error {
-	q.tasks.L.Lock()
+	q.mutex.Lock()
 	err := q.wait()
-	q.tasks.L.Unlock()
+	q.mutex.Unlock()
 	return err
 }
 
 // mutex must be held
 func (q *Queue) wait() error {
+	q.init()
 	for q.running > 0 || (q.len() > 0 && q.err() == nil) {
-		q.tasks.Wait()
+		q.cond.Wait()
 	}
 	return q.err()
 }
 
-func (q *Queue) resume() {
+// wait for runners to exit.
+func (q *Queue) waitExit() {
+	q.init()
 	for q.running > 0 {
-		q.tasks.Wait()
+		q.cond.Wait()
 	}
+}
+
+func (q *Queue) resume() {
+	q.running--
+	q.waitExit()
 	q.exitError = nil
-	q.context(q.octx)
+	q.context(q.originalCtx)
+	q.cond.Broadcast()
+}
+
+// Called before using cond.
+func (q *Queue) init() {
+	q.once.Do(func() {
+		q.cond.L = &q.mutex
+	})
 }
 
 // grows the function buffer by n,
